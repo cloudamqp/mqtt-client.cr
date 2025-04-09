@@ -166,6 +166,15 @@ module MQTT
 
       # http://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html#_Toc398718021
       private def read_loop
+        with_read_socket do |socket|
+          if socket.responds_to?(:read_timeout=)
+            if @keepalive.zero?
+              socket.read_timeout = nil
+            else
+              socket.read_timeout = @keepalive.seconds
+            end
+          end
+        end
         loop do
           with_read_socket do |socket|
             b = socket.read_byte || break
@@ -548,7 +557,6 @@ module MQTT
         socket.buffer_size = sock_opts.buffer_size if sock_opts.buffer_size.positive?
         socket.recv_buffer_size = sock_opts.recv_buffer_size if sock_opts.recv_buffer_size.positive?
         socket.send_buffer_size = sock_opts.send_buffer_size if sock_opts.send_buffer_size.positive?
-        socket.read_timeout = keepalive
         socket
       end
 
