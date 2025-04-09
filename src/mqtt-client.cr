@@ -87,7 +87,7 @@ module MQTT
       @lock.synchronize { @connection = reconnect }
     end
 
-    private def with_connection?
+    private def with_connection?(&)
       @lock.synchronize do
         if conn = @connection
           yield conn
@@ -95,7 +95,7 @@ module MQTT
       end
     end
 
-    private def with_connection
+    private def with_connection(&)
       @lock.synchronize do
         raise "call connect first" unless @connect
         @connection = reconnect unless @connection.try &.connected?
