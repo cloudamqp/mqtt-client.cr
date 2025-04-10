@@ -2,7 +2,10 @@ require "./connection"
 
 module MQTT
   class Client
-    record Message, topic : String, body : Bytes, qos : UInt8, retain = false, dup = false
+    record Message, topic : String, body : Bytes, qos : UInt8, retain = false, dup = false do
+      getter? dup
+      getter? retain
+    end
 
     struct ReceivedMessage
       # The order is important to minimize `sizeof`
@@ -11,8 +14,8 @@ module MQTT
       getter body : Bytes
       @packet_id : UInt16
       getter qos : UInt8
-      getter retain : Bool
-      getter dup : Bool
+      getter? retain : Bool
+      getter? dup : Bool
 
       def initialize(@connection : Connection, @packet_id : UInt16, @topic : String, @body : Bytes,
                      @qos : UInt8, @retain : Bool, @dup : Bool)

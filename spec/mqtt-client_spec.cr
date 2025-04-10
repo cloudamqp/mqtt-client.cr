@@ -20,7 +20,7 @@ describe MQTT::Client do
           packet = MP::Packet.from_io(client_io)
           case packet
           when MP::Publish
-            MP::PubAck.new(packet.packet_id.not_nil!).to_io(client_io)
+            MP::PubAck.new(packet.packet_id.not_nil!("Packet id not set?!")).to_io(client_io)
             packet.to_io(client_io) if subscribed
           when MP::Unsubscribe
             subscribed = false
@@ -71,7 +71,11 @@ describe MQTT::Client do
       mqtt = MQTT::Client.new(server.address.address, port: server.address.port, client_id: "can ping")
       mqtt.ping
       done.receive
-      mqtt.@connection.not_nil!.@last_packet_received.should be_close Time.monotonic, 1.second
+      if connection = mqtt.@connection
+        connection.@last_packet_received.should be_close Time.monotonic, 1.second
+      else
+        fail "no connection?!"
+      end
     end
   end
 

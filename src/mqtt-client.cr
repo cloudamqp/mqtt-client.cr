@@ -116,7 +116,7 @@ module MQTT
         Log.info { "connected to #{@host}:#{@port}" }
         unless @subscriptions.empty?
           Log.info { "subscribing to topics: #{@subscriptions}" }
-          connection.not_nil!.subscribe(@subscriptions.each)
+          connection.subscribe(@subscriptions.each)
         end
         return connection
       rescue ex

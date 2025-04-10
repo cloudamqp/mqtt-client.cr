@@ -38,9 +38,9 @@ module MQTT
                    else
                      connect_tcp(host, port, keepalive, sock_opts)
                    end
-          c = connection = Connection.new(socket, client_id, clean_session, user, password, will, keepalive.to_u16, autoack, on_message)
-          result.send c
-          c.read_loop
+          connection = Connection.new(socket, client_id, clean_session, user, password, will, keepalive.to_u16, autoack, on_message)
+          result.send connection
+          connection.read_loop
         rescue ex
           result.send ex
           socket.try &.close
@@ -52,7 +52,7 @@ module MQTT
         when Exception
           raise res
         when Connection
-          return res
+          res
         else
           raise "BUG: no error or connection returned"
         end
@@ -109,7 +109,7 @@ module MQTT
           if w = @will
             flags |= (1u8 << 2)
             flags |= (w.qos << 3)
-            flags |= (1u8 << 5) if w.retain
+            flags |= (1u8 << 5) if w.retain?
           end
           flags |= (1u8 << 6) if @password
           flags |= (1u8 << 7) if @user
@@ -181,6 +181,7 @@ module MQTT
       end
 
       # http://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html#_Toc398718021
+      # ameba:disable Metrics/CyclomaticComplexity
       protected def read_loop
         spawn message_loop, name: "mqtt-client:message_loop:#{@client_id}"
         with_read_socket do |socket|
@@ -361,7 +362,7 @@ module MQTT
       end
 
       def publish(msg : Message)
-        publish(msg.topic, msg.body, msg.qos, msg.retain)
+        publish(msg.topic, msg.body, msg.qos, msg.retain?)
       end
 
       def publish(topic : String, body, qos : Int = 0u8, retain = false, dup = false)

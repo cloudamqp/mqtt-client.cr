@@ -20,7 +20,7 @@ class SpecServer
   end
 end
 
-def with_server_socket
+def with_server_socket(&)
   TCPServer.open("127.0.0.1", 0, reuse_port: false) do |tcp|
     yield SpecServer.new(tcp)
   end
