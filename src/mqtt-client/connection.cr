@@ -30,13 +30,31 @@ module MQTT
                    user : String? = nil, password : String? = nil, will : Message? = nil,
                    keepalive : Int = 60u16, autoack = true, sock_opts = SocketOptions.new,
                    on_message : Proc(ReceivedMessage, Nil)? = nil)
-        Log.debug { "creating connection to #{host}:#{port}" }
-        if tls
-          socket = connect_tls(connect_tcp(host, port, keepalive, sock_opts), OpenSSL::SSL::VerifyMode::PEER, host)
-          Connection.new(socket, client_id, clean_session, user, password, will, keepalive.to_u16, autoack, on_message)
+        Log.debug { "Creating connection to #{host}:#{port}" }
+        result = Channel(Connection | Exception).new
+        spawn(name: "mqtt-client:read_loop:#{client_id}") do
+          socket = if tls
+                     connect_tls(connect_tcp(host, port, keepalive, sock_opts), OpenSSL::SSL::VerifyMode::PEER, host)
+                   else
+                     connect_tcp(host, port, keepalive, sock_opts)
+                   end
+          c = connection = Connection.new(socket, client_id, clean_session, user, password, will, keepalive.to_u16, autoack, on_message)
+          result.send c
+          c.read_loop
+        rescue ex
+          result.send ex
+          socket.try &.close
+        ensure
+          result.close
+        end
+
+        case res = result.receive?
+        when Exception
+          raise res
+        when Connection
+          return res
         else
-          socket = connect_tcp(host, port, keepalive, sock_opts)
-          Connection.new(socket, client_id, clean_session, user, password, will, keepalive.to_u16, autoack, on_message)
+          raise "BUG: no error or connection returned"
         end
       end
 
@@ -47,8 +65,6 @@ module MQTT
         send_connect
         expect_connack
         @connected = true
-        spawn read_loop, name: "mqtt-client:read_loop:#{@client_id}"
-        spawn message_loop, name: "mqtt-client:message_loop:#{@client_id}"
       end
 
       def disconnect
@@ -165,7 +181,8 @@ module MQTT
       end
 
       # http://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html#_Toc398718021
-      private def read_loop
+      protected def read_loop
+        spawn message_loop, name: "mqtt-client:message_loop:#{@client_id}"
         with_read_socket do |socket|
           if socket.responds_to?(:read_timeout=)
             if @keepalive.zero?
