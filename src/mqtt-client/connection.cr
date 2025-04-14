@@ -46,7 +46,8 @@ module MQTT
         send_connect
         expect_connack
         @connected = true
-        spawn read_loop, name: "mqtt-client read_loop"
+        spawn read_loop, name: "mqtt-client read_loop", same_thread: true
+        spawn message_loop, name: "mqtt-client message_loop", same_thread: true
       end
 
       def disconnect
@@ -151,7 +152,6 @@ module MQTT
 
       # http://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html#_Toc398718021
       private def read_loop(socket = @socket) # ameba:disable Metrics/CyclomaticComplexity
-        spawn message_loop, name: "mqtt-client message_loop", same_thread: true
         loop do
           b = socket.read_byte || break
           type = b >> 4          # upper 4 bits
