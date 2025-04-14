@@ -52,7 +52,7 @@ module MQTT
 
       def disconnect
         send_disconnect
-        Log.trace { "disconnected" }
+        Log.debug { "disconnected" }
         close
       end
 
@@ -67,7 +67,7 @@ module MQTT
 
       private def send_connect : Nil
         @lock.synchronize do
-          Log.trace { "sending connect" }
+          Log.debug { "sending connect" }
           socket = @socket
           socket.write_byte 0b00010000u8 # type + flags
 
@@ -102,7 +102,7 @@ module MQTT
             send_string(socket, password)
           end
 
-          Log.trace { "sent connect" }
+          Log.debug { "sent connect" }
           socket.flush
           update_last_packet_sent
         end
@@ -124,7 +124,7 @@ module MQTT
       end
 
       private def expect_connack
-        Log.trace { "waiting for connack" }
+        Log.debug { "waiting for connack" }
         socket = @socket
         b = socket.read_byte || raise IO::EOFError.new
         type = b >> 4          # upper 4 bits
@@ -135,7 +135,7 @@ module MQTT
         when 2 then connack(flags, pktlen)
         else        raise UnexpectedPacket.new
         end
-        Log.trace { "received connack" }
+        Log.debug { "received connack" }
       rescue ex : IO::TimeoutError
         raise TimeoutError.new("Connect timeout", cause: ex)
       end
@@ -176,10 +176,9 @@ module MQTT
           maybe_send_ping
         rescue ex : IO::TimeoutError
           try_send_ping(ex)
-        rescue ex : IO::Error
-          Log.trace { "io:error #{ex}\n\t#{ex.backtrace.join("\n\t")}" } if @connected
-          break
         end
+      rescue ex : IO::Error
+        Log.debug(exception: ex) { "io error in read_loop" } if @connected
       rescue ex
         raise ex if @connected
       ensure
@@ -214,7 +213,7 @@ module MQTT
         return_code = socket.read_byte || raise IO::EOFError.new
         case return_code
         when 0u8
-          Log.trace { "connected, session_present #{session_present}" }
+          Log.debug { "connected, session_present #{session_present}" }
           session_present
         when 1u8 then raise InvalidProtocolVersion.new
         when 2u8 then raise IdentifierReject.new
