@@ -10,6 +10,14 @@ module MQTT
                      @recv_buffer_size : Int32 = 512,
                      @send_buffer_size : Int32 = 256)
       end
+
+      def self.throughput_optimized
+        self.new(-1, -1, -1)
+      end
+
+      def self.memory_optimized
+        self.new
+      end
     end
 
     class Connection
@@ -23,7 +31,6 @@ module MQTT
       @packet_id = 0u16
       @keepalive = 60u16
       getter? connected = false
-      @lock = Mutex.new
 
       def self.new(host : String, port = 1883, tls = false, client_id = "", clean_session = true,
                    user : String? = nil, password : String? = nil, will : Message? = nil,
@@ -47,65 +54,61 @@ module MQTT
         expect_connack
         @connected = true
         spawn read_loop, name: "mqtt-client read_loop", same_thread: true
-        spawn message_loop, name: "mqtt-client message_loop", same_thread: true
+        spawn write_loop, name: "mqtt-client write_loop", same_thread: true
+        spawn message_loop, name: "mqtt-client message_loop"
       end
 
       def disconnect
-        send_disconnect
-        Log.debug { "disconnected" }
-        close
+        @write_requests.send Disconnect.new
       end
 
-      def close
-        @lock.synchronize do
-          @connected = false
-          @socket.close rescue nil
-        end
+      private def close
+        @connected = false
+        @write_requests.close
         @messages.close
         @acks.close
+        @socket.close rescue nil
       end
 
       private def send_connect : Nil
-        @lock.synchronize do
-          Log.debug { "sending connect" }
-          socket = @socket
-          socket.write_byte 0b00010000u8 # type + flags
+        Log.debug { "sending connect" }
+        socket = @socket
+        socket.write_byte 0b00010000u8 # type + flags
 
-          encode_length(socket, connect_length)
+        encode_length(socket, connect_length)
 
-          send_string(socket, "MQTT")
-          socket.write_byte 0x04 # protocol version 3.1.1
+        send_string(socket, "MQTT")
+        socket.write_byte 0x04 # protocol version 3.1.1
 
-          flags = 0u8
-          flags |= (1u8 << 1) if @clean_session
-          if w = @will
-            flags |= (1u8 << 2)
-            flags |= (w.qos << 3)
-            flags |= (1u8 << 5) if w.retain
-          end
-          flags |= (1u8 << 6) if @password
-          flags |= (1u8 << 7) if @user
-          socket.write_byte flags
-
-          socket.write_bytes (@keepalive || 0).to_u16, IO::ByteFormat::NetworkEndian
-
-          send_string(socket, @client_id)
-          if w = @will
-            send_string(socket, w.topic)
-            socket.write_bytes w.body.bytesize.to_u16, IO::ByteFormat::NetworkEndian
-            socket.write w.body
-          end
-          if user = @user
-            send_string(socket, user)
-          end
-          if password = @password
-            send_string(socket, password)
-          end
-
-          Log.debug { "sent connect" }
-          socket.flush
-          update_last_packet_sent
+        flags = 0u8
+        flags |= (1u8 << 1) if @clean_session
+        if w = @will
+          flags |= (1u8 << 2)
+          flags |= (w.qos << 3)
+          flags |= (1u8 << 5) if w.retain
         end
+        flags |= (1u8 << 6) if @password
+        flags |= (1u8 << 7) if @user
+        socket.write_byte flags
+
+        socket.write_bytes (@keepalive || 0).to_u16, IO::ByteFormat::NetworkEndian
+
+        send_string(socket, @client_id)
+        if w = @will
+          send_string(socket, w.topic)
+          socket.write_bytes w.body.bytesize.to_u16, IO::ByteFormat::NetworkEndian
+          socket.write w.body
+        end
+        if user = @user
+          send_string(socket, user)
+        end
+        if password = @password
+          send_string(socket, password)
+        end
+
+        Log.debug { "sent connect" }
+        socket.flush
+        update_last_packet_sent
       end
 
       private def connect_length : Int32
@@ -140,13 +143,107 @@ module MQTT
         raise TimeoutError.new("Connect timeout", cause: ex)
       end
 
-      def message_loop(messages = @messages)
+      private def message_loop(messages = @messages)
         loop do
           message = messages.receive? || break
           if on_message = @on_message
             on_message.call(message)
           end
           message.ack if @autoack
+        end
+      end
+
+      @write_requests = Channel(Packet).new(1)
+
+      private def write_loop
+        while packet = @write_requests.receive?
+          case packet
+          in Subscribe
+            id = send_subscribe(packet.topics)
+            wait_for_id(id)
+          in Disconnect
+            send_disconnect
+            Log.debug { "disconnected" }
+            close
+          in Unsubscribe
+            id = send_unsubscribe(packet.topics)
+            wait_for_id(id)
+          in Publish
+            id = send_publish(packet.topic, packet.body, packet.qos, packet.retain, packet.dup)
+            wait_for_id(id) if id
+          in PingReq
+            send_pingreq
+          in PubAck
+            send_puback(packet.packet_id)
+          in PubRec
+            send_pubrec(packet.packet_id)
+          in PubRel
+            send_pubrel(packet.packet_id)
+          in PubComp
+            send_pubcomp(packet.packet_id)
+          in Packet
+            raise "too abstract"
+          end
+        end
+      ensure
+        close
+      end
+
+      abstract struct Packet
+      end
+
+      struct Subscribe < Packet
+        getter topics
+
+        def initialize(@topics : Enumerable(Tuple(String, UInt8)))
+        end
+      end
+
+      struct PingReq < Packet
+      end
+
+      struct PubAck < Packet
+        getter packet_id
+
+        def initialize(@packet_id : UInt16)
+        end
+      end
+
+      struct PubRec < Packet
+        getter packet_id
+
+        def initialize(@packet_id : UInt16)
+        end
+      end
+
+      struct PubRel < Packet
+        getter packet_id
+
+        def initialize(@packet_id : UInt16)
+        end
+      end
+
+      struct PubComp < Packet
+        getter packet_id
+
+        def initialize(@packet_id : UInt16)
+        end
+      end
+
+      struct Disconnect < Packet
+      end
+
+      struct Unsubscribe < Packet
+        getter topics
+
+        def initialize(@topics : Enumerable(String))
+        end
+      end
+
+      struct Publish < Packet
+        getter topic, body, qos, retain, dup
+
+        def initialize(@topic : String, @body : Bytes, @qos : UInt8, @retain : Bool, @dup : Bool)
         end
       end
 
@@ -234,11 +331,11 @@ module MQTT
       end
 
       def puback(packet_id : UInt16)
-        send_puback(packet_id)
+        @write_requests.send PubAck.new(packet_id)
       end
 
       def pubrec(packet_id : UInt16)
-        send_pubrec(packet_id)
+        @write_requests.send PubRec.new(packet_id)
       end
 
       def on_message=(blk : Proc(ReceivedMessage, Nil)?)
@@ -258,42 +355,36 @@ module MQTT
       end
 
       def subscribe(topics : Enumerable(Tuple(String, UInt8)))
-        id = send_subscribe(topics)
-        wait_for_id(id)
+        @write_requests.send Subscribe.new(topics)
       end
 
       private def send_subscribe(topics : Enumerable(Tuple(String, UInt8)))
-        @lock.synchronize do
-          socket = @socket
-          socket.write_byte 0b10000010u8
+        socket = @socket
+        socket.write_byte 0b10000010u8
 
-          length = 2 + topics.sum { |topic, _| 2 + topic.bytesize + 1 }
-          encode_length(socket, length)
+        length = 2 + topics.sum { |topic, _| 2 + topic.bytesize + 1 }
+        encode_length(socket, length)
 
-          id = send_next_packet_id(socket)
-          topics.each do |topic, qos|
-            send_string(socket, topic)
-            socket.write_byte qos.to_u8
-          end
-          socket.flush
-          update_last_packet_sent
-          id
+        id = send_next_packet_id(socket)
+        topics.each do |topic, qos|
+          send_string(socket, topic)
+          socket.write_byte qos.to_u8
         end
+        socket.flush
+        update_last_packet_sent
+        id
       end
 
       private def send_disconnect : Nil
-        @lock.synchronize do
-          socket = @socket
-          socket.write_byte 0b11100000u8
-          socket.write_byte 0u8
-          socket.flush
-          update_last_packet_sent
-        end
+        socket = @socket
+        socket.write_byte 0b11100000u8
+        socket.write_byte 0u8
+        socket.flush
+        update_last_packet_sent
       end
 
       def unsubscribe(*topics : String)
-        id = send_unsubscribe(topics)
-        wait_for_id(id)
+        @write_requests.send Unsubscribe.new(topics)
       end
 
       private def wait_for_id(id : UInt16)
@@ -306,21 +397,19 @@ module MQTT
       end
 
       private def send_unsubscribe(topics)
-        @lock.synchronize do
-          socket = @socket
-          socket.write_byte 0b10100010u8
+        socket = @socket
+        socket.write_byte 0b10100010u8
 
-          length = 2 + topics.sum { |topic| 2 + topic.bytesize }
-          encode_length(socket, length)
+        length = 2 + topics.sum { |topic| 2 + topic.bytesize }
+        encode_length(socket, length)
 
-          id = send_next_packet_id(socket)
-          topics.each do |topic|
-            send_string(socket, topic)
-          end
-          socket.flush
-          update_last_packet_sent
-          id
+        id = send_next_packet_id(socket)
+        topics.each do |topic|
+          send_string(socket, topic)
         end
+        socket.flush
+        update_last_packet_sent
+        id
       end
 
       def publish(msg : Message)
@@ -328,33 +417,29 @@ module MQTT
       end
 
       def publish(topic : String, body, qos : Int = 0u8, retain = false, dup = false)
-        if id = send_publish(topic, body.to_slice, qos.to_u8, retain, dup)
-          wait_for_id(id)
-        end
+        @write_requests.send Publish.new(topic, body, qos, retain, dup)
       end
 
       private def send_publish(topic : String, body : Slice, qos : UInt8, retain : Bool, dup : Bool) : UInt16?
         raise ArgumentError.new("Invalid QoS") unless 0 <= qos <= 2
+        socket = @socket
 
         header = 0b00110000u8
         header |= (1u8 << 3) if dup
         header |= (qos << 1)
         header |= (1u8 << 0) if retain
-        @lock.synchronize do
-          socket = @socket
-          socket.write_byte header # type + flags
+        socket.write_byte header # type + flags
 
-          length = 2 + topic.bytesize + body.bytesize
-          length += 2 if qos > 0
-          encode_length(socket, length)
+        length = 2 + topic.bytesize + body.bytesize
+        length += 2 if qos > 0
+        encode_length(socket, length)
 
-          send_string(socket, topic)
-          id = send_next_packet_id(socket) if qos > 0
-          socket.write body
-          socket.flush
-          update_last_packet_sent
-          id
-        end
+        send_string(socket, topic)
+        id = send_next_packet_id(socket) if qos > 0
+        socket.write body
+        socket.flush
+        update_last_packet_sent
+        id
       end
 
       private def send_next_packet_id(socket) : UInt16
@@ -388,13 +473,11 @@ module MQTT
       end
 
       private def send_pingreq
-        @lock.synchronize do
-          socket = @socket
-          socket.write_byte 0b11000000u8
-          socket.write_byte 0u8
-          socket.flush
-          update_last_packet_sent
-        end
+        socket = @socket
+        socket.write_byte 0b11000000u8
+        socket.write_byte 0u8
+        socket.flush
+        update_last_packet_sent
       end
 
       private def puback(flags, pktlen)
@@ -450,47 +533,39 @@ module MQTT
       end
 
       private def send_puback(packet_id)
-        @lock.synchronize do
-          socket = @socket
-          socket.write_byte 0b01000000 # type + flags
-          socket.write_byte 2u8        # length
-          socket.write_bytes packet_id, IO::ByteFormat::NetworkEndian
-          socket.flush
-          update_last_packet_sent
-        end
+        socket = @socket
+        socket.write_byte 0b01000000 # type + flags
+        socket.write_byte 2u8        # length
+        socket.write_bytes packet_id, IO::ByteFormat::NetworkEndian
+        socket.flush
+        update_last_packet_sent
       end
 
       private def send_pubrec(packet_id)
-        @lock.synchronize do
-          socket = @socket
-          socket.write_byte 0b01100010 # type + flags
-          socket.write_byte 2u8        # length
-          socket.write_bytes packet_id, IO::ByteFormat::NetworkEndian
-          socket.flush
-          update_last_packet_sent
-        end
+        socket = @socket
+        socket.write_byte 0b01100010 # type + flags
+        socket.write_byte 2u8        # length
+        socket.write_bytes packet_id, IO::ByteFormat::NetworkEndian
+        socket.flush
+        update_last_packet_sent
       end
 
       private def send_pubrel(packet_id)
-        @lock.synchronize do
-          socket = @socket
-          socket.write_byte 0b01110010 # type + flags
-          socket.write_byte 2u8        # length
-          socket.write_bytes packet_id, IO::ByteFormat::NetworkEndian
-          socket.flush
-          update_last_packet_sent
-        end
+        socket = @socket
+        socket.write_byte 0b01110010 # type + flags
+        socket.write_byte 2u8        # length
+        socket.write_bytes packet_id, IO::ByteFormat::NetworkEndian
+        socket.flush
+        update_last_packet_sent
       end
 
       private def send_pubcomp(packet_id)
-        @lock.synchronize do
-          socket = @socket
-          socket.write_byte 0b01110000 # type + flags
-          socket.write_byte 2u8        # length
-          socket.write_bytes packet_id, IO::ByteFormat::NetworkEndian
-          socket.flush
-          update_last_packet_sent
-        end
+        socket = @socket
+        socket.write_byte 0b01110000 # type + flags
+        socket.write_byte 2u8        # length
+        socket.write_bytes packet_id, IO::ByteFormat::NetworkEndian
+        socket.flush
+        update_last_packet_sent
       end
 
       private def send_string(socket : IO, str : String)
