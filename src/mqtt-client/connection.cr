@@ -50,8 +50,8 @@ module MQTT
                      @user : String? = nil, @password : String? = nil,
                      @will : Message? = nil, @keepalive : UInt16 = 60u16,
                      @autoack = false, @on_message : Proc(ReceivedMessage, Nil)? = nil)
-        send_connect
-        expect_connack
+        send_connect(@socket)
+        expect_connack(@socket)
         @connected = true
         spawn read_loop, name: "mqtt-client read_loop", same_thread: true
         spawn write_loop, name: "mqtt-client write_loop", same_thread: true
@@ -62,7 +62,7 @@ module MQTT
         @write_requests.send Disconnect.new
       end
 
-      private def close
+      def close
         @connected = false
         @write_requests.close
         @messages.close
@@ -70,9 +70,8 @@ module MQTT
         @socket.close rescue nil
       end
 
-      private def send_connect : Nil
+      private def send_connect(socket) : Nil
         Log.debug { "sending connect" }
-        socket = @socket
         socket.write_byte 0b00010000u8 # type + flags
 
         encode_length(socket, connect_length)
@@ -126,9 +125,8 @@ module MQTT
         length
       end
 
-      private def expect_connack
+      private def expect_connack(socket)
         Log.debug { "waiting for connack" }
-        socket = @socket
         b = socket.read_byte || raise IO::EOFError.new
         type = b >> 4          # upper 4 bits
         flags = b & 0b00001111 # lower 4 bits
@@ -155,32 +153,32 @@ module MQTT
 
       @write_requests = Channel(Packet).new(1)
 
-      private def write_loop
+      private def write_loop(socket = @socket)
         while packet = @write_requests.receive?
           case packet
           in Subscribe
-            id = send_subscribe(packet.topics)
+            id = send_subscribe(socket, packet.topics)
             wait_for_id(id)
           in Disconnect
-            send_disconnect
+            send_disconnect(socket)
             Log.debug { "disconnected" }
             close
           in Unsubscribe
-            id = send_unsubscribe(packet.topics)
+            id = send_unsubscribe(socket, packet.topics)
             wait_for_id(id)
           in Publish
-            id = send_publish(packet.topic, packet.body, packet.qos, packet.retain, packet.dup)
+            id = send_publish(socket, packet.topic, packet.body, packet.qos, packet.retain, packet.dup)
             wait_for_id(id) if id
           in PingReq
-            send_pingreq
+            send_pingreq(socket)
           in PubAck
-            send_puback(packet.packet_id)
+            send_puback(socket, packet.packet_id)
           in PubRec
-            send_pubrec(packet.packet_id)
+            send_pubrec(socket, packet.packet_id)
           in PubRel
-            send_pubrel(packet.packet_id)
+            send_pubrel(socket, packet.packet_id)
           in PubComp
-            send_pubcomp(packet.packet_id)
+            send_pubcomp(socket, packet.packet_id)
           in Packet
             raise "too abstract"
           end
@@ -288,7 +286,7 @@ module MQTT
         now = Time.monotonic
         @last_packet_received = now
         if (now - @last_packet_sent).total_seconds > @keepalive * 0.9
-          send_pingreq
+          @write_requests.send PingReq.new
         end
       end
 
@@ -300,7 +298,7 @@ module MQTT
         if ping_diff.total_seconds > @keepalive * 1.5
           raise TimeoutError.new("No ping response from server in #{ping_diff}", cause: ex)
         else
-          send_pingreq
+          @write_requests.send PingReq.new
         end
       end
 
@@ -327,7 +325,7 @@ module MQTT
       end
 
       def ping
-        send_pingreq
+        @write_requests.send PingReq.new
       end
 
       def puback(packet_id : UInt16)
@@ -358,8 +356,7 @@ module MQTT
         @write_requests.send Subscribe.new(topics)
       end
 
-      private def send_subscribe(topics : Enumerable(Tuple(String, UInt8)))
-        socket = @socket
+      private def send_subscribe(socket, topics : Enumerable(Tuple(String, UInt8)))
         socket.write_byte 0b10000010u8
 
         length = 2 + topics.sum { |topic, _| 2 + topic.bytesize + 1 }
@@ -375,8 +372,7 @@ module MQTT
         id
       end
 
-      private def send_disconnect : Nil
-        socket = @socket
+      private def send_disconnect(socket) : Nil
         socket.write_byte 0b11100000u8
         socket.write_byte 0u8
         socket.flush
@@ -396,8 +392,7 @@ module MQTT
         end
       end
 
-      private def send_unsubscribe(topics)
-        socket = @socket
+      private def send_unsubscribe(socket, topics)
         socket.write_byte 0b10100010u8
 
         length = 2 + topics.sum { |topic| 2 + topic.bytesize }
@@ -420,9 +415,8 @@ module MQTT
         @write_requests.send Publish.new(topic, body, qos, retain, dup)
       end
 
-      private def send_publish(topic : String, body : Slice, qos : UInt8, retain : Bool, dup : Bool) : UInt16?
+      private def send_publish(socket, topic : String, body : Slice, qos : UInt8, retain : Bool, dup : Bool) : UInt16?
         raise ArgumentError.new("Invalid QoS") unless 0 <= qos <= 2
-        socket = @socket
 
         header = 0b00110000u8
         header |= (1u8 << 3) if dup
@@ -472,8 +466,7 @@ module MQTT
         @messages.send(ReceivedMessage.new(self, packet_id, topic, body, qos, retain, dup))
       end
 
-      private def send_pingreq
-        socket = @socket
+      private def send_pingreq(socket)
         socket.write_byte 0b11000000u8
         socket.write_byte 0u8
         socket.flush
@@ -493,7 +486,7 @@ module MQTT
         pktlen == 2 || raise "invalid pubrec length"
 
         packet_id = read_int(@socket)
-        send_pubrel(packet_id)
+        @write_requests.send PubRel.new(packet_id)
       end
 
       private def pubrel(flags, pktlen)
@@ -532,8 +525,7 @@ module MQTT
         @acks.send packet_id
       end
 
-      private def send_puback(packet_id)
-        socket = @socket
+      private def send_puback(socket, packet_id)
         socket.write_byte 0b01000000 # type + flags
         socket.write_byte 2u8        # length
         socket.write_bytes packet_id, IO::ByteFormat::NetworkEndian
@@ -541,8 +533,7 @@ module MQTT
         update_last_packet_sent
       end
 
-      private def send_pubrec(packet_id)
-        socket = @socket
+      private def send_pubrec(socket, packet_id)
         socket.write_byte 0b01100010 # type + flags
         socket.write_byte 2u8        # length
         socket.write_bytes packet_id, IO::ByteFormat::NetworkEndian
@@ -550,8 +541,7 @@ module MQTT
         update_last_packet_sent
       end
 
-      private def send_pubrel(packet_id)
-        socket = @socket
+      private def send_pubrel(socket, packet_id)
         socket.write_byte 0b01110010 # type + flags
         socket.write_byte 2u8        # length
         socket.write_bytes packet_id, IO::ByteFormat::NetworkEndian
@@ -559,8 +549,7 @@ module MQTT
         update_last_packet_sent
       end
 
-      private def send_pubcomp(packet_id)
-        socket = @socket
+      private def send_pubcomp(socket, packet_id)
         socket.write_byte 0b01110000 # type + flags
         socket.write_byte 2u8        # length
         socket.write_bytes packet_id, IO::ByteFormat::NetworkEndian
