@@ -20,7 +20,7 @@ describe MQTT::Client do
           packet = MP::Packet.from_io(client_io)
           case packet
           when MP::Publish
-            MP::PubAck.new(packet.packet_id.not_nil!).to_io(client_io)
+            MP::PubAck.new(packet.packet_id.not_nil!("PacketID missing")).to_io(client_io)
             packet.to_io(client_io) if subscribed
           when MP::Unsubscribe
             subscribed = false
@@ -72,7 +72,7 @@ describe MQTT::Client do
       mqtt.ping
       done.receive
       mqtt.close
-      mqtt.@connection.not_nil!.@last_packet_received.should be_close Time.monotonic, 1.second
+      mqtt.@connection.not_nil!("Connection missing").@last_packet_received.should be_close Time.monotonic, 1.second
     end
   end
 

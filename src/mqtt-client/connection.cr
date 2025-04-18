@@ -261,7 +261,7 @@ module MQTT
       private def send_subscribe(socket, topics : Enumerable(Tuple(String, UInt8)))
         socket.write_byte 0b10000010u8
 
-        length = 2 + topics.sum { |t, _| 2 + t.bytesize + 1 }
+        length = 2 + topics.sum { |topic, _| 2 + topic.bytesize + 1 }
         encode_length(socket, length)
 
         id = send_next_packet_id(socket)
@@ -298,7 +298,7 @@ module MQTT
       private def send_unsubscribe(socket, topics)
         socket.write_byte 0b10100010u8
 
-        length = 2 + topics.sum { |t| 2 + t.bytesize }
+        length = 2 + topics.sum { |topic| 2 + topic.bytesize }
         encode_length(socket, length)
 
         id = send_next_packet_id(socket)
@@ -520,7 +520,7 @@ module MQTT
         socket.buffer_size = sock_opts.buffer_size if sock_opts.buffer_size.positive?
         socket.recv_buffer_size = sock_opts.recv_buffer_size if sock_opts.recv_buffer_size.positive?
         socket.send_buffer_size = sock_opts.send_buffer_size if sock_opts.send_buffer_size.positive?
-        socket.read_timeout = keepalive
+        socket.read_timeout = keepalive.seconds
         socket
       end
 

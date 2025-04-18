@@ -50,7 +50,7 @@ module MQTT
       raise ArgumentError.new("No on_message handler set") unless @on_message
       with_connection do |conn|
         conn.subscribe(topics)
-        topics.each { |t, q| @subscriptions[t] = q }
+        topics.each { |topic, qos| @subscriptions[topic] = qos }
       end
     end
 
@@ -64,7 +64,7 @@ module MQTT
     def unsubscribe(*topics : String)
       with_connection do |conn|
         conn.unsubscribe(*topics)
-        topics.each { |t| @subscriptions.delete(t) }
+        topics.each { |topic| @subscriptions.delete(topic) }
       end
     end
 
@@ -87,7 +87,7 @@ module MQTT
       @lock.synchronize { @connection = reconnect }
     end
 
-    private def with_connection?
+    private def with_connection?(&)
       @lock.synchronize do
         if conn = @connection
           yield conn
@@ -95,7 +95,7 @@ module MQTT
       end
     end
 
-    private def with_connection
+    private def with_connection(&)
       @lock.synchronize do
         raise "call connect first" unless @connect
         @connection = reconnect unless @connection.try &.connected?
@@ -116,12 +116,12 @@ module MQTT
         Log.info { "connected to #{@host}:#{@port}" }
         unless @subscriptions.empty?
           Log.info { "subscribing to topics: #{@subscriptions}" }
-          connection.not_nil!.subscribe(@subscriptions.each)
+          connection.subscribe(@subscriptions.each)
         end
         return connection
       rescue ex
         Log.trace { "connect error\n\t#{ex.backtrace.join("\n\t")}" }
-        sleep @reconnect_interval
+        sleep @reconnect_interval.seconds
       end
     end
 
