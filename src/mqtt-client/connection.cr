@@ -35,9 +35,9 @@ module MQTT
         @reader = Reader.new(@socket, @acks, @writer, @keepalive)
         @writer.connect(client_id, clean_session, user, password, will, keepalive)
         @reader.expect_connack
-        spawn(name: "mqtt-client write_loop", same_thread: true) { @writer.run }
-        spawn(name: "mqtt-client reader_loop", same_thread: true) { @reader.run }
-        spawn message_loop, name: "mqtt-client message_loop"
+        spawn(name: "mqtt-client write_loop") { @writer.run }
+        spawn(name: "mqtt-client reader_loop") { @reader.run }
+        spawn(name: "mqtt-client message_loop") { message_loop }
       end
 
       def disconnect
