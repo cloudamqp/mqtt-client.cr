@@ -23,7 +23,7 @@ module MQTT
       @verify_mode = OpenSSL::SSL::VerifyMode::PEER
       @reconnect_interval = 1
       @connect = false
-      Log.trace { "autoconnect = #{autoconnect}" }
+      Log.debug { "autoconnect = #{autoconnect}" }
       connect if autoconnect
     end
 
@@ -81,7 +81,7 @@ module MQTT
     end
 
     def connect
-      Log.trace { "connect @connect=#{@connect}" }
+      Log.debug { "connect @connect=#{@connect}" }
       return if @connect
       @connect = true
       @lock.synchronize { @connection = reconnect }
@@ -120,7 +120,7 @@ module MQTT
         end
         return connection
       rescue ex
-        Log.trace { "connect error\n\t#{ex.backtrace.join("\n\t")}" }
+        Log.debug(exception: ex) { "reconnect error" }
         sleep @reconnect_interval.seconds
       end
     end

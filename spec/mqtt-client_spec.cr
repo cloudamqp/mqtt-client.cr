@@ -72,7 +72,7 @@ describe MQTT::Client do
       mqtt.ping
       done.receive
       mqtt.close
-      mqtt.@connection.not_nil!("Connection missing").@last_packet_received.should be_close Time.monotonic, 1.second
+      mqtt.@connection.not_nil!("Connection missing").@reader.@last_packet_received.should be_close Time.monotonic, 1.second
     end
   end
 
