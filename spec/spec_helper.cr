@@ -1,6 +1,6 @@
 require "spec"
-require "../src/mqtt-client"
 require "mqtt-protocol"
+require "../src/mqtt-client"
 
 class SpecServer
   def initialize(@server : TCPServer)

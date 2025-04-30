@@ -71,7 +71,7 @@ describe MQTT::Client do
       mqtt = MQTT::Client.new(server.address.address, port: server.address.port, client_id: "can ping")
       mqtt.ping
       done.receive
-      mqtt.@connection.not_nil!("Connection missing").@last_packet_received.should be_close Time.monotonic, 1.second
+      mqtt.@connection.not_nil!("Connection missing").@reader.@last_packet_received.should be_close Time.monotonic, 1.second
     end
   end
 
