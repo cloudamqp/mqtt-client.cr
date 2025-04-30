@@ -8,7 +8,7 @@ describe MQTT::Client do
       done = Channel(Nil).new(1)
 
       # This "mocks" the server
-      server.with_client do |client_io|
+      server.accept_client do |client_io|
         MP::Packet.from_io(client_io)
         MP::Connack.new(false, MP::Connack::ReturnCode::Accepted).to_io(client_io)
 
@@ -48,8 +48,8 @@ describe MQTT::Client do
       mqtt.unsubscribe("foo")
       mqtt.publish("foo", "bar", 1)
       mqtt.disconnect
-      mqtt.close
       done.receive
+      mqtt.close
       recieved_message_count.should eq 2
     end
   end
@@ -58,7 +58,7 @@ describe MQTT::Client do
     with_server_socket do |server|
       done = Channel(Nil).new(1)
 
-      server.with_client do |client_io|
+      server.accept_client do |client_io|
         MP::Packet.from_io(client_io)
         MP::Connack.new(false, MP::Connack::ReturnCode::Accepted).to_io(client_io)
 
@@ -71,6 +71,7 @@ describe MQTT::Client do
       mqtt = MQTT::Client.new(server.address.address, port: server.address.port, client_id: "can ping")
       mqtt.ping
       done.receive
+      mqtt.close
       mqtt.@connection.not_nil!("Connection missing").@reader.@last_packet_received.should be_close Time.monotonic, 1.second
     end
   end
@@ -80,11 +81,10 @@ describe MQTT::Client do
       done = Channel(Nil).new(1)
       ping_recieved = false
 
-      server.with_client do |client_io|
+      server.accept_client do |client_io|
         connect = MP::Packet.from_io(client_io).as(MP::Connect)
-        client_io.@io.as(Socket).read_timeout = connect.keepalive * 1.5
+        client_io.@io.as(Socket).read_timeout = (connect.keepalive * 1.5).seconds
         MP::Connack.new(false, MP::Connack::ReturnCode::Accepted).to_io(client_io)
-
         MP::Packet.from_io(client_io).as(MP::PingReq)
         ping_recieved = true
       rescue IO::Error
@@ -92,10 +92,14 @@ describe MQTT::Client do
       ensure
         done.send(nil)
       end
-
-      MQTT::Client.new(server.address.address, port: server.address.port, keepalive: 1u16, client_id: "can keepalive")
-      done.receive
-      ping_recieved.should be_true
+      mqtt = MQTT::Client.new(server.address.address, port: server.address.port, keepalive: 1u16, client_id: "can keepalive")
+      select
+      when done.receive
+        ping_recieved.should be_true
+      when timeout 10.seconds
+        fail "Timeout waiting for ping"
+      end
+      mqtt.close
     end
   end
 end

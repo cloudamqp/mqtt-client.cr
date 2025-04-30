@@ -10,7 +10,7 @@ class SpecServer
     @server.local_address
   end
 
-  def with_client(&blk : MQTT::Protocol::IO -> Nil)
+  def accept_client(&blk : MQTT::Protocol::IO -> Nil)
     spawn(name: "with_client") do
       client_socket = @server.accept?
       raise "accept? returned nil" if client_socket.nil?
