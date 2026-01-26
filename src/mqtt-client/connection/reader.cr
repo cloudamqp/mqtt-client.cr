@@ -196,7 +196,7 @@ module MQTT
         value = 0
         loop do
           b = socket.read_byte || raise IO::EOFError.new
-          value = (b & 127) * multiplier
+          value += (b & 127) * multiplier
           multiplier *= 128
           raise "invalid packet length" if multiplier > 128*128*128
           break if b & 128 == 0
