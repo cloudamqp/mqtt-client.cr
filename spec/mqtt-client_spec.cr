@@ -54,12 +54,12 @@ describe MQTT::Client do
     end
   end
 
-  it "can read messages" do
+  it "can read messages of different sizes" do
     with_server_socket do |server|
       done = Channel(Nil).new(1)
       sizes = [
         1, 10, 127, 128, 138, 16_383, 16_384, 16_394,
-        2_097_151, 2_097_152, 2_097_162, 268_435_455 - (2 + 3), # 2 + 3 = size of topic
+        2_097_151, 2_097_152, 2_097_162, 268_435_455,
       ]
 
       expected_body = uninitialized Bytes
@@ -74,8 +74,12 @@ describe MQTT::Client do
         subscribed = true
         random = Random.new
         sizes.each do |size|
+          # -5 is for "foo" bytesize + string length which is also part
+          # of "remaining length"
+          size = {0, size - 5}.max
           expected_body = random.random_bytes(size)
-          MP::Publish.new("foo", expected_body, nil, false, 0u8, false).to_io(client_io)
+          pub = MP::Publish.new("foo", expected_body, nil, false, 0u8, false)
+          pub.to_io(client_io)
           client_io.flush
           ch_send_next.receive
         end
