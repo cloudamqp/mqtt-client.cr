@@ -3,7 +3,12 @@ require "./packet"
 module MQTT
   class Client
     class Writer
-      getter last_packet_sent = Time.monotonic
+      {% if compare_versions(Crystal::VERSION, "1.19.0") < 0 %}
+        getter last_packet_sent = ::Time.monotonic
+      {% else %}
+        getter last_packet_sent = ::Time.instant
+      {% end %}
+
       @packet_id = 0u16
       @requests = Channel(Packet).new(1)
 
@@ -165,7 +170,11 @@ module MQTT
       end
 
       private def update_last_packet_sent
-        @last_packet_sent = Time.monotonic
+        {% if compare_versions(Crystal::VERSION, "1.19.0") < 0 %}
+          @last_packet_sent = Time.monotonic
+        {% else %}
+          @last_packet_sent = Time.instant
+        {% end %}
       end
 
       private def next_packet_id : UInt16

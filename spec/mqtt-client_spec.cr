@@ -72,7 +72,13 @@ describe MQTT::Client do
       mqtt.ping
       done.receive
       mqtt.close
-      mqtt.@connection.not_nil!("Connection missing").@reader.@last_packet_received.should be_close Time.monotonic, 1.second
+      connection = mqtt.@connection.should_not be_nil
+      expected = {% if compare_versions(Crystal::VERSION, "1.19.0") < 0 %}
+                   ::Time.monotonic
+                 {% else %}
+                   ::Time.instant
+                 {% end %}
+      connection.@reader.@last_packet_received.should be_close expected, 1.second
     end
   end
 
