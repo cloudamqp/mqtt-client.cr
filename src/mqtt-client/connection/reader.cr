@@ -192,14 +192,14 @@ module MQTT
       end
 
       private def decode_length(socket)
-        multiplier = 1
-        value = 0
+        multiplier = 1i32
+        value = 0i32
         loop do
           b = socket.read_byte || raise IO::EOFError.new
-          value = (b & 127) * multiplier
-          multiplier *= 128
+          value += multiplier * (b & 127u8)
+          break if b & 128u8 == 0
+          multiplier *= 128i32
           raise "invalid packet length" if multiplier > 128*128*128
-          break if b & 128 == 0
         end
         value
       end
