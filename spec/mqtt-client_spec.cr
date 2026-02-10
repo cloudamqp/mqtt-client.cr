@@ -54,6 +54,57 @@ describe MQTT::Client do
     end
   end
 
+  it "can read messages of different sizes" do
+    with_server_socket do |server|
+      done = Channel(Nil).new(1)
+      sizes = [
+        1, 10, 127, 128, 138, 16_383, 16_384, 16_394,
+        2_097_151, 2_097_152, 2_097_162, 268_435_455,
+      ]
+
+      expected_body = uninitialized Bytes
+      ch_send_next = Channel(Nil).new
+      server.accept_client do |client_io|
+        MP::Packet.from_io(client_io)
+        MP::Connack.new(false, MP::Connack::ReturnCode::Accepted).to_io(client_io)
+
+        sub = MP::Packet.from_io(client_io).as(MP::Subscribe)
+        MP::SubAck.new([MP::SubAck::ReturnCode::QoS0], sub.packet_id).to_io(client_io)
+
+        subscribed = true
+        random = Random.new
+        sizes.each do |size|
+          # -5 is for "foo" bytesize + string length which is also part
+          # of "remaining length"
+          size = {0, size - 5}.max
+          expected_body = random.random_bytes(size)
+          pub = MP::Publish.new("foo", expected_body, nil, false, 0u8, false)
+          pub.to_io(client_io)
+          client_io.flush
+          ch_send_next.receive
+        end
+        done.send(nil)
+      end
+
+      mqtt = MQTT::Client.new(
+        server.address.address,
+        port: server.address.port,
+        client_id: "can consume"
+      )
+
+      mqtt.on_message do |msg|
+        msg.body.size.should eq expected_body.size
+        msg.body.should eq expected_body
+        ch_send_next.send nil
+      end
+      mqtt.subscribe("foo", 0)
+      done.receive
+      mqtt.close
+    ensure
+      ch_send_next.try &.close
+    end
+  end
+
   it "can ping" do
     with_server_socket do |server|
       done = Channel(Nil).new(1)
