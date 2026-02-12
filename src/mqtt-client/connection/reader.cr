@@ -5,7 +5,11 @@ module MQTT
     class Reader
       record Message, packet_id : UInt16, topic : String, body : Bytes, qos : UInt8, retain : Bool, dup : Bool
       getter messages = Channel(Message).new(16)
-      @last_packet_received = Time.monotonic
+      {% if compare_versions(Crystal::VERSION, "1.19.0") < 0 %}
+        @last_packet_received = Time.monotonic
+      {% else %}
+        @last_packet_received = Time.instant
+      {% end %}
       @connected = true
 
       def initialize(@socket : IO, @acks : Channel(UInt16), @writer : Writer, @keepalive : UInt16)
@@ -55,7 +59,12 @@ module MQTT
       private def maybe_send_ping
         return unless @keepalive.positive?
 
-        now = Time.monotonic
+        now = {% if compare_versions(Crystal::VERSION, "1.19.0") < 0 %}
+                Time.monotonic
+              {% else %}
+                Time.instant
+              {% end %}
+
         @last_packet_received = now
         if (now - @writer.last_packet_sent).total_seconds > @keepalive * 0.9
           @writer.send PingReq.new
@@ -65,7 +74,12 @@ module MQTT
       private def try_send_ping(ex)
         raise ex unless @keepalive.positive?
 
-        now = Time.monotonic
+        now = {% if compare_versions(Crystal::VERSION, "1.19.0") < 0 %}
+                Time.monotonic
+              {% else %}
+                Time.instant
+              {% end %}
+
         ping_diff = now - @last_packet_received
         if ping_diff.total_seconds > @keepalive * 1.5
           raise TimeoutError.new("No ping response from server in #{ping_diff}", cause: ex)
