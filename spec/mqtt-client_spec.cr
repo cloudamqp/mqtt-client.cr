@@ -154,3 +154,42 @@ describe MQTT::Client do
     end
   end
 end
+
+describe MQTT::Client::Connection do
+  it "closes the TCP socket when the TLS handshake fails" do
+    TCPServer.open("127.0.0.1", 0, reuse_port: false) do |server|
+      closed = Channel(Bool).new(1)
+      spawn(name: "not a TLS server") do
+        if socket = server.accept?
+          socket.read_timeout = 2.seconds
+          buf = Bytes.new(4096)
+          begin
+            socket.write "not a TLS server\n".to_slice
+            socket.flush
+            while socket.read(buf) > 0
+            end
+            closed.send true
+          rescue IO::TimeoutError
+            closed.send false
+          rescue IO::Error
+            # The client closed the socket with unread data, the kernel sent a reset
+            closed.send true
+          ensure
+            socket.close
+          end
+        end
+      end
+
+      expect_raises(OpenSSL::SSL::Error) do
+        MQTT::Client::Connection.new("127.0.0.1", server.local_address.port, tls: true)
+      end
+
+      select
+      when result = closed.receive
+        result.should be_true
+      when timeout(5.seconds)
+        fail "The server did not see the result of the handshake"
+      end
+    end
+  end
+end
