@@ -138,6 +138,10 @@ module MQTT
         tls_socket.read_buffering = true
         tls_socket.buffer_size = 16384
         tls_socket
+      rescue ex
+        # OpenSSL::SSL::Socket::Client.new does not close the socket if the handshake fails
+        socket.close rescue nil
+        raise ex
       end
     end
 
